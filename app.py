@@ -1,381 +1,267 @@
-from flask import Flask, request, jsonify, render_template, session, redirect, url_for
-import sqlite3
-import os
+from flask import Flask, render_template, request, session, redirect, url_for
+from flask_sqlalchemy import SQLAlchemy
 
 app = Flask(__name__)
-app.secret_key = '761-922-263'  # Секретный ключ для сессий
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///sanechekBD.db'
+db = SQLAlchemy(app)
+app.secret_key = 'your_secret_key_here'  # Replace with a secure secret key
 
-def get_db_connection():
-    conn = sqlite3.connect('database/database.db', timeout=10)
-    conn.row_factory = sqlite3.Row
-    return conn
+class Sight(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    info = db.Column(db.Text, nullable=False)
+    adress = db.Column(db.Text)
+    contac_info = db.Column(db.Text)
+    dop_info = db.Column(db.Text)
 
-def init_db():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            email TEXT NOT NULL UNIQUE,
-            password TEXT NOT NULL
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS children (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            name TEXT NOT NULL,
-            birth_date TEXT NOT NULL,
-            gender TEXT NOT NULL,
-            FOREIGN KEY (user_id) REFERENCES users (id)
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS courses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            duration TEXT NOT NULL,
-            cost REAL NOT NULL
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS enrollments (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            course_id INTEGER NOT NULL,
-            child_id INTEGER NOT NULL,
-            FOREIGN KEY (course_id) REFERENCES courses (id),
-            FOREIGN KEY (child_id) REFERENCES children (id)
-        )
-    ''')
-    conn.commit()
-    conn.close()
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    fio = db.Column(db.Text, nullable=False)
+    email = db.Column(db.Text, nullable=False)
+    password = db.Column(db.Text, nullable=False)
+    status = db.Column(db.Text, nullable=False)
 
-def reset_autoincrement(table_name):
-    conn = sqlite3.connect('database/database.db')
-    cursor = conn.cursor()
+class Review(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    text = db.Column(db.Text, nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    sight_id = db.Column(db.Integer, db.ForeignKey('sight.id'), nullable=False)
+    user = db.relationship('User', backref=db.backref('reviews', lazy=True))
+    sight = db.relationship('Sight', backref=db.backref('reviews', lazy=True))
 
-    # Удаляем все записи из таблицы
-    cursor.execute(f'DELETE FROM {table_name}')
 
-    # Сбрасываем автоинкрементный счетчик
-    cursor.execute(f'UPDATE sqlite_sequence SET seq = 0 WHERE name = "{table_name}"')
+class Suggestion(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    info = db.Column(db.Text, nullable=False)
+    adress = db.Column(db.Text)
+    contac_info = db.Column(db.Text)
+    dop_info = db.Column(db.Text)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
+    user = db.relationship('User', backref=db.backref('suggestions', lazy=True))
+    status = db.Column(db.String(50), default='pending')  # 'pending', 'approved', 'rejected'
+    photo_path = db.Column(db.String(255))  # Путь к загруженной фотографии
 
-    conn.commit()
-    conn.close()
 
-def init_courses():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    # Очищаем таблицу курсов
-    cursor.execute('DELETE FROM courses')
-    
-    # Добавляем курсы
-    courses = [
-        ('Математика', '60 минут', 2000),
-        ('Чтение', '45 минут', 2500),
-        ('Письмо', '45 минут', 1800),
-        ('Мир вокруг', '60 минут', 2200),
-        ('Творчество', '60 минут', 2100),
-        ('Мышление', '45 минут', 2000)
-    ]
-    
-    cursor.executemany('INSERT INTO courses (name, duration, cost) VALUES (?, ?, ?)', courses)
-    conn.commit()
-    conn.close()
+class Event(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text, nullable=False)
+    date = db.Column(db.DateTime, nullable=False)
+    sight_id = db.Column(db.Integer, db.ForeignKey('sight.id'), nullable=False)
+    sight = db.relationship('Sight', backref=db.backref('events', lazy=True))
+
+
 
 @app.route('/')
-def home():
-    return render_template('main.html')
+def index():
+    sights = Sight.query.all()
+    user = User.query.get(session.get('user')) if 'user' in session else None
+    return render_template("index.html", sights=sights, user=user)
 
-@app.route('/register', methods=['POST'])
+@app.route('/register')
 def register():
-    data = request.get_json()
-    name = data['name']
-    email = data['email']
-    password = data['password']
+    return render_template('register.html')
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute('''
-            INSERT INTO users (name, email, password) VALUES (?, ?, ?)
-        ''', (name, email, password))
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'User registered successfully'}), 201
-    except sqlite3.IntegrityError:
-        conn.close()
-        return jsonify({'message': 'Email already exists'}), 400
 
-@app.route('/login', methods=['POST'])
+@app.route('/register_form')
+def register_form():
+    return render_template('register_form.html')
+
+
+@app.route('/login', methods=['GET', 'POST'])
 def login():
-    data = request.get_json()
-    email = data['email']
-    password = data['password']
-
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT id, name FROM users WHERE email = ? AND password = ?', (email, password))
-    user = cursor.fetchone()
-    conn.close()
-
-    if user:
-        session['user_id'] = user['id']
-        session['user_name'] = user['name']
-        return jsonify({'message': 'Login successful'}), 200
-    else:
-        return jsonify({'message': 'Invalid credentials'}), 401
-
-@app.route('/logout', methods=['POST'])
-def logout():
-    session.pop('user_id', None)
-    session.pop('user_name', None)
-    return jsonify({'message': 'Logged out'}), 200
-
-@app.route('/profile')
-def profile():
-    if 'user_id' in session:
-        user_id = session['user_id']
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT name, email FROM users WHERE id = ?', (user_id,))
-        user = cursor.fetchone()
-
-        cursor.execute('''
-            SELECT c.name AS child_name, co.name AS course_name, e.id AS enrollment_id
-            FROM enrollments e
-            JOIN children c ON e.child_id = c.id
-            JOIN courses co ON e.course_id = co.id
-            WHERE c.user_id = ?
-        ''', (user_id,))
-        enrollments = cursor.fetchall()
-
-        conn.close()
-
-        if user:
-            name, email = user
-            return render_template('profile.html', name=name, email=email, enrollments=enrollments)
+    if request.method == 'POST':
+        email = request.form['email']
+        password = request.form['password']
+        user = User.query.filter_by(email=email).first()
+        if user and user.password == password:
+            session['user'] = user.id
+            session['user_status'] = user.status  # Сохраняем статус пользователя в сессии
+            return redirect(url_for('index'))
         else:
-            return redirect(url_for('home'))
-    else:
-        return redirect(url_for('home'))
+            return "Invalid email or password"  # Add a better error message or redirect to login page with error
+    return render_template('login.html')
 
-@app.route('/add_child', methods=['GET', 'POST'])
-def add_child():
-    if 'user_id' not in session:
-        return redirect(url_for('home'))
+
+
+@app.route('/logout')
+def logout():
+    session.pop('user', None)  # Remove the user from the session
+    session.pop('user_status', None)  # Remove the user status from the session
+    return redirect(url_for('index'))
+
+@app.route('/sight/<int:sight_id>', methods=['GET', 'POST'])
+def sight_detail(sight_id):
+    sight = Sight.query.get_or_404(sight_id)
+    events = Event.query.filter_by(sight_id=sight_id).all()  # Получаем события для данной достопримечательности
+    if request.method == 'POST' and 'user' in session:
+        review_text = request.form['review']
+        user_id = session['user']
+        new_review = Review(text=review_text, user_id=user_id, sight_id=sight_id)
+        db.session.add(new_review)
+        db.session.commit()
+        return redirect(url_for('sight_detail', sight_id=sight_id))
+    reviews = Review.query.filter_by(sight_id=sight_id).all()
+    user = User.query.get(session.get('user')) if 'user' in session else None
+    return render_template('sight_detail.html', sight=sight, reviews=reviews, events=events, user=user)
+
+
+@app.route('/delete_review/<int:review_id>', methods=['POST'])
+def delete_review(review_id):
+    review = Review.query.get_or_404(review_id)
+    if 'user' in session:
+        user_id = session['user']
+        user = User.query.get(user_id)
+        if user.status == 'admin' or review.user_id == user_id:
+            db.session.delete(review)
+            db.session.commit()
+            return redirect(url_for('sight_detail', sight_id=review.sight_id))
+    return "You do not have permission to delete this review", 403
+
+@app.route('/edit_review/<int:review_id>', methods=['GET', 'POST'])
+def edit_review(review_id):
+    review = Review.query.get_or_404(review_id)
+    if 'user' in session:
+        user_id = session['user']
+        if review.user_id == user_id:
+            if request.method == 'POST':
+                review.text = request.form['review']
+                db.session.commit()
+                return redirect(url_for('sight_detail', sight_id=review.sight_id))
+            return render_template('edit_review.html', review=review)
+    return "You do not have permission to edit this review", 403
+
+
+
+
+
+
+
+
+import os
+from werkzeug.utils import secure_filename
+
+# Укажите путь к папке для загрузки файлов
+UPLOAD_FOLDER = 'static/uploads'
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# Разрешенные расширения файлов
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+@app.route('/suggest_sight', methods=['GET', 'POST'])
+def suggest_sight():
+    if 'user' not in session:
+        return redirect(url_for('login'))
 
     if request.method == 'POST':
         name = request.form['name']
-        birth_date = request.form['birth_date']
-        gender = request.form['gender']
-        user_id = session['user_id']
+        info = request.form['info']
+        adress = request.form['adress']
+        contac_info = request.form['contac_info']
+        dop_info = request.form['dop_info']
+        user_id = session['user']
 
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO children (user_id, name, birth_date, gender) VALUES (?, ?, ?, ?)
-        ''', (user_id, name, birth_date, gender))
-        conn.commit()
-        conn.close()
+        # Проверяем, загружен ли файл
+        if 'photo' not in request.files:
+            return "No file part"
 
-        return redirect(url_for('profile'))
+        file = request.files['photo']
 
-    return render_template('add_child.html')
+        # Если пользователь не выбрал файл
+        if file.filename == '':
+            return "No selected file"
 
-@app.route('/children_list', methods=['GET'])
-def children_list():
-    if 'user_id' not in session:
-        return redirect(url_for('home'))
+        # Проверяем, что файл имеет допустимое расширение
+        if file and allowed_file(file.filename):
+            # Формируем имя файла на основе имени достопримечательности
+            filename = secure_filename(f"{name.replace(' ', '_')}_{file.filename}")
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            file.save(file_path)
 
-    user_id = session['user_id']
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT id, name, birth_date, gender FROM children WHERE user_id = ?', (user_id,))
-    children = cursor.fetchall()
-    conn.close()
+            new_suggestion = Suggestion(
+                name=name,
+                info=info,
+                adress=adress,
+                contac_info=contac_info,
+                dop_info=dop_info,
+                user_id=user_id
+            )
+            db.session.add(new_suggestion)
+            db.session.commit()
+            return redirect(url_for('index'))
 
-    return render_template('children_list.html', children=children)
+    return render_template('suggest_sight.html') 
 
-@app.route('/delete_child/<int:child_id>', methods=['POST'])
-def delete_child(child_id):
-    if 'user_id' not in session:
-        return redirect(url_for('home'))
 
-    user_id = session['user_id']
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM children WHERE id = ? AND user_id = ?', (child_id, user_id))
-    conn.commit()
-    conn.close()
-
-    return redirect(url_for('children_list'))
-
-@app.route('/course1')
-def course1():
-    children = []
-    if 'user_id' in session:
-        user_id = session['user_id']
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT id, name FROM children WHERE user_id = ?', (user_id,))
-        children = cursor.fetchall()
-        conn.close()
-    return render_template('course1.html', children=children)
-
-@app.route('/course2')
-def course2():
-    children = []
-    if 'user_id' in session:
-        user_id = session['user_id']
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT id, name FROM children WHERE user_id = ?', (user_id,))
-        children = cursor.fetchall()
-        conn.close()
-    return render_template('course2.html', children=children)
-
-@app.route('/course3')
-def course3():
-    children = []
-    if 'user_id' in session:
-        user_id = session['user_id']
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT id, name FROM children WHERE user_id = ?', (user_id,))
-        children = cursor.fetchall()
-        conn.close()
-    return render_template('course3.html', children=children)
-
-@app.route('/course4')
-def course4():
-    children = []
-    if 'user_id' in session:
-        user_id = session['user_id']
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT id, name FROM children WHERE user_id = ?', (user_id,))
-        children = cursor.fetchall()
-        conn.close()
-    return render_template('course4.html', children=children)
-
-@app.route('/course5')
-def course5():
-    children = []
-    if 'user_id' in session:
-        user_id = session['user_id']
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT id, name FROM children WHERE user_id = ?', (user_id,))
-        children = cursor.fetchall()
-        conn.close()
-    return render_template('course5.html', children=children)
-
-@app.route('/course6')
-def course6():
-    children = []
-    if 'user_id' in session:
-        user_id = session['user_id']
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT id, name FROM children WHERE user_id = ?', (user_id,))
-        children = cursor.fetchall()
-        conn.close()
-    return render_template('course6.html', children=children)
-
-@app.route('/enroll', methods=['POST'])
-def enroll():
-    if 'user_id' not in session:
+@app.route('/admin/suggestions')
+def admin_suggestions():
+    # Проверяем, авторизован ли пользователь
+    if 'user' not in session:
         return redirect(url_for('login'))
 
-    course_id = request.form['course_id']
-    children = request.form.getlist('children')
+    # Получаем текущего пользователя
+    user = User.query.get(session['user'])
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    # Проверяем, является ли пользователь администратором
+    if user.status != 'admin':
+        return "You do not have permission to view this page", 403
 
-    for child_id in children:
-        cursor.execute('INSERT INTO enrollments (course_id, child_id) VALUES (?, ?)', (course_id, child_id))
+    # Получаем все предложения со статусом 'pending'
+    suggestions = Suggestion.query.filter_by(status='pending').all()
 
-    conn.commit()
-    conn.close()
+    # Передаем данные в шаблон
+    return render_template('admin_suggestions.html', suggestions=suggestions)
 
-    return "Вы успешно записаны на курс!", 200
 
-@app.route('/unenroll/<int:enrollment_id>', methods=['POST'])
-def unenroll(enrollment_id):
-    if 'user_id' not in session:
-        return redirect(url_for('home'))
+@app.route('/admin/approve_suggestion/<int:suggestion_id>', methods=['POST'])
+def approve_suggestion(suggestion_id):
+    if 'user' not in session:
+        return redirect(url_for('login'))
 
-    user_id = session['user_id']
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    user = User.query.get(session['user'])
+    if user.status != 'admin':
+        return "You do not have permission to perform this action", 403
 
-    # Проверка, что запись принадлежит текущему пользователю
-    cursor.execute('''
-        SELECT e.id
-        FROM enrollments e
-        JOIN children c ON e.child_id = c.id
-        WHERE e.id = ? AND c.user_id = ?
-    ''', (enrollment_id, user_id))
-    enrollment = cursor.fetchone()
+    suggestion = Suggestion.query.get_or_404(suggestion_id)
+    new_sight = Sight(
+        name=suggestion.name,
+        info=suggestion.info,
+        adress=suggestion.adress,
+        contac_info=suggestion.contac_info,
+        dop_info=suggestion.dop_info
+    )
+    db.session.add(new_sight)
+    db.session.delete(suggestion)
+    db.session.commit()
+    return redirect(url_for('admin_suggestions'))
 
-    if enrollment:
-        cursor.execute('DELETE FROM enrollments WHERE id = ?', (enrollment_id,))
-        conn.commit()
+@app.route('/admin/reject_suggestion/<int:suggestion_id>', methods=['POST'])
+def reject_suggestion(suggestion_id):
+    if 'user' not in session:
+        return redirect(url_for('login'))
 
-    conn.close()
+    user = User.query.get(session['user'])
+    if user.status != 'admin':
+        return "You do not have permission to perform this action", 403
 
-    return redirect(url_for('enrollments_list'))
+    suggestion = Suggestion.query.get_or_404(suggestion_id)
+    db.session.delete(suggestion)
+    db.session.commit()
+    return redirect(url_for('admin_suggestions'))
 
-@app.route('/enrollments_list', methods=['GET'])
-def enrollments_list():
-    if 'user_id' not in session:
-        return redirect(url_for('home'))
+from datetime import datetime
 
-    user_id = session['user_id']
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT c.name AS child_name, co.name AS course_name, e.id AS enrollment_id
-        FROM enrollments e
-        JOIN children c ON e.child_id = c.id
-        JOIN courses co ON e.course_id = co.id
-        WHERE c.user_id = ?
-    ''', (user_id,))
-    enrollments = cursor.fetchall()
-    conn.close()
-
-    return render_template('enrollments_list.html', enrollments=enrollments)
-    
-
-@app.route('/about')
-def about():
-    return render_template('about.html')
-
-@app.route('/teachers')
-def teachers():
-    return render_template('teachers.html')
-
-    user_id = session['user_id']
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT c.name AS child_name, co.name AS course_name, e.id AS enrollment_id
-        FROM enrollments e
-        JOIN children c ON e.child_id = c.id
-        JOIN courses co ON e.course_id = co.id
-        WHERE c.user_id = ?
-    ''', (user_id,))
-    enrollments = cursor.fetchall()
-    conn.close()
-
-    return render_template('enrollments_list.html', enrollments=enrollments)
+# Пример корректной даты
+correct_date = datetime(2025, 9, 23, 23, 9)  # Год, месяц, день, час, минута
 
 
 if __name__ == '__main__':
-    init_db()
+    with app.app_context():
+        db.create_all()
+    app.run(debug=True)
     port = int(os.environ.get('PORT', 5000))  # Используйте порт из Render или 5000 по умолчанию
     app.run(host='0.0.0.0', port=port, debug=True)
